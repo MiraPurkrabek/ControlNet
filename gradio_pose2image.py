@@ -22,16 +22,44 @@ model.load_state_dict(load_state_dict('./models/control_sd15_openpose.pth', loca
 model = model.cuda()
 ddim_sampler = DDIMSampler(model)
 
+SKELETON = [
+    [0, 1],
+    [1, 2],
+    [1, 5],
+    [2, 3],
+    [3, 4],
+    [5, 6],
+    [6, 7],
+    [2, 8],
+    [5, 11],
+    [8, 11],
+    [8, 9],
+    [9, 10],
+    [11, 12],
+    [12, 13],
+    [0, 14],
+    [0, 15],
+    [14, 16],
+    [15, 17],
+]
+
 
 def process(input_image, prompt, a_prompt, n_prompt, num_samples, image_resolution, detect_resolution, ddim_steps, guess_mode, strength, scale, seed, eta):
     with torch.no_grad():
         input_image = HWC3(input_image)
-        detected_map, _ = apply_openpose(resize_image(input_image, detect_resolution))
-        detected_map = HWC3(detected_map)
         img = resize_image(input_image, image_resolution)
         H, W, C = img.shape
+        
+        detected_map_full, kpts = apply_openpose(resize_image(input_image, detect_resolution))
+        detected_map_full = HWC3(detected_map_full)
+        detected_map = cv2.resize(detected_map_full, (W, H), interpolation=cv2.INTER_NEAREST)
 
-        detected_map = cv2.resize(detected_map, (W, H), interpolation=cv2.INTER_NEAREST)
+        # Process the keypoints
+        kpts = np.array(kpts["candidate"])
+        kpts[:, 0] /= detected_map_full.shape[1]
+        kpts[:, 1] /= detected_map_full.shape[0]
+        kpts[:, 0] *= W
+        kpts[:, 1] *= H
 
         control = torch.from_numpy(detected_map.copy()).float().cuda() / 255.0
         control = torch.stack([control for _ in range(num_samples)], dim=0)
@@ -63,7 +91,54 @@ def process(input_image, prompt, a_prompt, n_prompt, num_samples, image_resoluti
         x_samples = model.decode_first_stage(samples)
         x_samples = (einops.rearrange(x_samples, 'b c h w -> b h w c') * 127.5 + 127.5).cpu().numpy().clip(0, 255).astype(np.uint8)
 
-        results = [x_samples[i] for i in range(num_samples)]
+        # results = [x_samples[i] for i in range(num_samples)]
+        results = []
+        print(kpts)
+        for i in range(num_samples):
+            src = x_samples[i].astype(np.uint8).copy()
+            print("src.shape", src.shape)
+            print("src type", type(src))
+            for kpt in kpts:
+                src = cv2.circle(
+                    src,
+                    (int(kpt[0]), int(kpt[1])),
+                    radius=4,
+                    color=(255, 0, 0),
+                    thickness=-1,
+                )
+
+            for bone in SKELETON:
+                if kpt.shape[0] < 19:
+                    k0 = kpts[bone[0]]
+                    k1 = kpts[bone[1]]
+                else:
+                    k0 = kpts[bone[0]+1]
+                    k1 = kpts[bone[1]+1]
+                src = cv2.line(
+                    src,
+                    (int(k0[0]), int(k0[1])),
+                    (int(k1[0]), int(k1[1])),
+                    color=(255, 0, 0),
+                    thickness=2,
+                )
+
+            results.append(src)
+        # alpha = 0.3
+        # results = [cv2.addWeighted(
+        #     x_samples[i],
+        #     alpha,
+        #     detected_map,
+        #     1-alpha, 
+        #     0.0,
+        # ) for i in range(num_samples)]
+            
+        print("Results:")
+        print(results[0].shape)
+        print(type(results[0]))
+        print("Detected map:")
+        print(detected_map.shape)
+        print(type(detected_map))
+
     return [detected_map] + results
 
 
@@ -76,15 +151,15 @@ with block:
             input_image = gr.Image(source='upload', type="numpy")
             prompt = gr.Textbox(label="Prompt")
             run_button = gr.Button(label="Run")
-            with gr.Accordion("Advanced options", open=False):
+            with gr.Accordion("Advanced options", open=True):
                 num_samples = gr.Slider(label="Images", minimum=1, maximum=12, value=1, step=1)
-                image_resolution = gr.Slider(label="Image Resolution", minimum=256, maximum=768, value=512, step=64)
+                image_resolution = gr.Slider(label="Image Resolution", minimum=256, maximum=768, value=256, step=64)
                 strength = gr.Slider(label="Control Strength", minimum=0.0, maximum=2.0, value=1.0, step=0.01)
                 guess_mode = gr.Checkbox(label='Guess Mode', value=False)
                 detect_resolution = gr.Slider(label="OpenPose Resolution", minimum=128, maximum=1024, value=512, step=1)
-                ddim_steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=20, step=1)
+                ddim_steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=10, step=1)
                 scale = gr.Slider(label="Guidance Scale", minimum=0.1, maximum=30.0, value=9.0, step=0.1)
-                seed = gr.Slider(label="Seed", minimum=-1, maximum=2147483647, step=1, randomize=True)
+                seed = gr.Slider(label="Seed", minimum=-1, maximum=2147483647, step=1, value=-1, randomize=True)
                 eta = gr.Number(label="eta (DDIM)", value=0.0)
                 a_prompt = gr.Textbox(label="Added Prompt", value='best quality, extremely detailed')
                 n_prompt = gr.Textbox(label="Negative Prompt",
