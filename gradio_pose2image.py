@@ -44,22 +44,27 @@ SKELETON = [
 ]
 
 
-def process(input_image, prompt, a_prompt, n_prompt, num_samples, image_resolution, detect_resolution, ddim_steps, guess_mode, strength, scale, seed, eta):
+def process(input_image, prompt, a_prompt, n_prompt, num_samples, image_resolution, detect_resolution, ddim_steps, guess_mode, strength, scale, seed, eta, input_is_posemap):
     with torch.no_grad():
+        
         input_image = HWC3(input_image)
         img = resize_image(input_image, image_resolution)
         H, W, C = img.shape
         
-        detected_map_full, kpts = apply_openpose(resize_image(input_image, detect_resolution))
-        detected_map_full = HWC3(detected_map_full)
-        detected_map = cv2.resize(detected_map_full, (W, H), interpolation=cv2.INTER_NEAREST)
+        if input_is_posemap:
+            detected_map = cv2.resize(input_image, (W, H), interpolation=cv2.INTER_LINEAR)
+        else:
 
-        # Process the keypoints
-        kpts = np.array(kpts["candidate"])
-        kpts[:, 0] /= detected_map_full.shape[1]
-        kpts[:, 1] /= detected_map_full.shape[0]
-        kpts[:, 0] *= W
-        kpts[:, 1] *= H
+            detected_map_full, kpts = apply_openpose(resize_image(input_image, detect_resolution))
+            detected_map_full = HWC3(detected_map_full)
+            detected_map = cv2.resize(detected_map_full, (W, H), interpolation=cv2.INTER_NEAREST)
+
+            # Process the keypoints
+            kpts = np.array(kpts["candidate"])
+            kpts[:, 0] /= detected_map_full.shape[1]
+            kpts[:, 1] /= detected_map_full.shape[0]
+            kpts[:, 0] *= W
+            kpts[:, 1] *= H
 
         control = torch.from_numpy(detected_map.copy()).float().cuda() / 255.0
         control = torch.stack([control for _ in range(num_samples)], dim=0)
@@ -93,52 +98,36 @@ def process(input_image, prompt, a_prompt, n_prompt, num_samples, image_resoluti
 
         # results = [x_samples[i] for i in range(num_samples)]
         results = []
-        print(kpts)
         for i in range(num_samples):
             src = x_samples[i].astype(np.uint8).copy()
-            print("src.shape", src.shape)
-            print("src type", type(src))
-            for kpt in kpts:
-                src = cv2.circle(
-                    src,
-                    (int(kpt[0]), int(kpt[1])),
-                    radius=4,
-                    color=(255, 0, 0),
-                    thickness=-1,
-                )
+            
+            if not input_is_posemap:
+                for kpt in kpts:
+                    src = cv2.circle(
+                        src,
+                        (int(kpt[0]), int(kpt[1])),
+                        radius=4,
+                        color=(255, 0, 0),
+                        thickness=-1,
+                    )
 
-            for bone in SKELETON:
-                if kpt.shape[0] < 19:
-                    k0 = kpts[bone[0]]
-                    k1 = kpts[bone[1]]
-                else:
-                    k0 = kpts[bone[0]+1]
-                    k1 = kpts[bone[1]+1]
-                src = cv2.line(
-                    src,
-                    (int(k0[0]), int(k0[1])),
-                    (int(k1[0]), int(k1[1])),
-                    color=(255, 0, 0),
-                    thickness=2,
-                )
+                for bone in SKELETON:
+                    if kpt.shape[0] < 19:
+                        k0 = kpts[bone[0]]
+                        k1 = kpts[bone[1]]
+                    else:
+                        k0 = kpts[bone[0]+1]
+                        k1 = kpts[bone[1]+1]
+                    src = cv2.line(
+                        src,
+                        (int(k0[0]), int(k0[1])),
+                        (int(k1[0]), int(k1[1])),
+                        color=(255, 0, 0),
+                        thickness=2,
+                    )
 
             results.append(src)
-        # alpha = 0.3
-        # results = [cv2.addWeighted(
-        #     x_samples[i],
-        #     alpha,
-        #     detected_map,
-        #     1-alpha, 
-        #     0.0,
-        # ) for i in range(num_samples)]
             
-        print("Results:")
-        print(results[0].shape)
-        print(type(results[0]))
-        print("Detected map:")
-        print(detected_map.shape)
-        print(type(detected_map))
-
     return [detected_map] + results
 
 
@@ -152,6 +141,7 @@ with block:
             prompt = gr.Textbox(label="Prompt")
             run_button = gr.Button(label="Run")
             with gr.Accordion("Advanced options", open=True):
+                input_is_posemap = gr.Checkbox(label='Insert Posemap Directly', value=True)
                 num_samples = gr.Slider(label="Images", minimum=1, maximum=12, value=1, step=1)
                 image_resolution = gr.Slider(label="Image Resolution", minimum=256, maximum=768, value=256, step=64)
                 strength = gr.Slider(label="Control Strength", minimum=0.0, maximum=2.0, value=1.0, step=0.01)
@@ -161,12 +151,12 @@ with block:
                 scale = gr.Slider(label="Guidance Scale", minimum=0.1, maximum=30.0, value=9.0, step=0.1)
                 seed = gr.Slider(label="Seed", minimum=-1, maximum=2147483647, step=1, value=-1, randomize=True)
                 eta = gr.Number(label="eta (DDIM)", value=0.0)
-                a_prompt = gr.Textbox(label="Added Prompt", value='best quality, extremely detailed')
+                a_prompt = gr.Textbox(label="Added Prompt", value='best quality, extremely detailed, realistic, extremely realistic, photo, photorealistic, human, person')
                 n_prompt = gr.Textbox(label="Negative Prompt",
-                                      value='longbody, lowres, bad anatomy, bad hands, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality')
+                                      value='longbody, lowres, bad anatomy, bad hands, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality, drawing, draw, animated')
         with gr.Column():
             result_gallery = gr.Gallery(label='Output', show_label=False, elem_id="gallery").style(grid=2, height='auto')
-    ips = [input_image, prompt, a_prompt, n_prompt, num_samples, image_resolution, detect_resolution, ddim_steps, guess_mode, strength, scale, seed, eta]
+    ips = [input_image, prompt, a_prompt, n_prompt, num_samples, image_resolution, detect_resolution, ddim_steps, guess_mode, strength, scale, seed, eta, input_is_posemap]
     run_button.click(fn=process, inputs=ips, outputs=[result_gallery])
 
 

@@ -37,9 +37,6 @@ def process(input_image, prompt, a_prompt, n_prompt, num_samples, image_resoluti
             detected_map = HWC3(detected_map)
             detected_map = cv2.resize(detected_map, (W, H), interpolation=cv2.INTER_LINEAR)
 
-        print(detected_map.shape, type(detected_map), detected_map.dtype)
-        print(np.min(detected_map), np.mean(detected_map), np.max(detected_map))
-
         if process_images_in_series:
             num_images = num_samples
             num_samples = 1
@@ -121,9 +118,9 @@ with block:
                 scale = gr.Slider(label="Guidance Scale", minimum=0.1, maximum=30.0, value=9.0, step=0.1)
                 seed = gr.Slider(label="Seed", minimum=-1, maximum=2147483647, step=1, randomize=True)
                 eta = gr.Number(label="eta (DDIM)", value=0.0)
-                a_prompt = gr.Textbox(label="Added Prompt", value='best quality, extremely detailed')
+                a_prompt = gr.Textbox(label="Added Prompt", value='best quality, extremely detailed, realistic, extremely realistic, photo, photorealistic, human, person')
                 n_prompt = gr.Textbox(label="Negative Prompt",
-                                      value='longbody, lowres, bad anatomy, bad hands, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality')
+                                      value='longbody, lowres, bad anatomy, bad hands, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality, drawing, draw, animated')
         with gr.Column():
             result_gallery = gr.Gallery(label='Output', show_label=False, elem_id="gallery").style(grid=2, height='auto')
     ips = [input_image, prompt, a_prompt, n_prompt, num_samples, image_resolution, detect_resolution, ddim_steps, guess_mode, strength, scale, seed, eta, input_is_depthmap, process_images_in_series]
